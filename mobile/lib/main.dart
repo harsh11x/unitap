@@ -29,7 +29,224 @@ class UniTapMobileApp extends StatelessWidget {
           surface: Colors.white,
         ),
       ),
-      home: const UniTapShell(),
+      home: const WelcomeGate(),
+    );
+  }
+}
+
+class WelcomeGate extends StatefulWidget {
+  const WelcomeGate({super.key});
+
+  @override
+  State<WelcomeGate> createState() => _WelcomeGateState();
+}
+
+class _WelcomeGateState extends State<WelcomeGate> {
+  bool _showApp = false;
+
+  @override
+  Widget build(BuildContext context) {
+    if (_showApp) return const UniTapShell();
+
+    return WelcomeScreen(onContinue: () => setState(() => _showApp = true));
+  }
+}
+
+class WelcomeScreen extends StatelessWidget {
+  const WelcomeScreen({super.key, required this.onContinue});
+
+  final VoidCallback onContinue;
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      body: SafeArea(
+        child: UniTapScaffold(
+          child: ListView(
+            padding: const EdgeInsets.fromLTRB(22, 22, 22, 28),
+            children: [
+              const Row(
+                children: [
+                  GradientLogo(),
+                  SizedBox(width: 12),
+                  Text(
+                    'UniTap',
+                    style: TextStyle(
+                      color: unitapInk,
+                      fontSize: 22,
+                      fontWeight: FontWeight.w900,
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 34),
+              Container(
+                padding: const EdgeInsets.all(22),
+                decoration: BoxDecoration(
+                  color: unitapInk,
+                  borderRadius: BorderRadius.circular(34),
+                  boxShadow: const [
+                    BoxShadow(
+                      color: Color(0x220F172A),
+                      blurRadius: 34,
+                      offset: Offset(0, 18),
+                    ),
+                  ],
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const PillLabel(
+                      icon: Icons.sensors_rounded,
+                      label: 'Welcome to smart campus pay',
+                    ),
+                    const SizedBox(height: 24),
+                    const Text(
+                      'Tap. Pay. Track. All across campus.',
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontSize: 40,
+                        fontWeight: FontWeight.w900,
+                        height: 0.95,
+                        letterSpacing: -1.7,
+                      ),
+                    ),
+                    const SizedBox(height: 14),
+                    const Text(
+                      'A cashless RFID wallet app for students, shopkeepers, university heads, and platform admins.',
+                      style: TextStyle(color: Colors.white70, height: 1.55),
+                    ),
+                    const SizedBox(height: 24),
+                    Container(
+                      padding: const EdgeInsets.all(18),
+                      decoration: BoxDecoration(
+                        borderRadius: BorderRadius.circular(28),
+                        gradient: const LinearGradient(
+                          begin: Alignment.topLeft,
+                          end: Alignment.bottomRight,
+                          colors: [unitapBlue, unitapTeal, unitapOrange],
+                        ),
+                      ),
+                      child: const Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            'RFID Student Card',
+                            style: TextStyle(
+                              color: Colors.white70,
+                              fontWeight: FontWeight.w800,
+                            ),
+                          ),
+                          SizedBox(height: 18),
+                          Text(
+                            '**** 2841',
+                            style: TextStyle(
+                              color: Colors.white,
+                              fontSize: 24,
+                              fontWeight: FontWeight.w900,
+                            ),
+                          ),
+                          SizedBox(height: 20),
+                          Row(
+                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                            children: [
+                              Text(
+                                'INR 2,480',
+                                style: TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 30,
+                                  fontWeight: FontWeight.w900,
+                                ),
+                              ),
+                              Icon(
+                                Icons.wifi_tethering_rounded,
+                                color: Colors.white,
+                              ),
+                            ],
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 22),
+              const Row(
+                children: [
+                  Expanded(
+                    child: WelcomeMetric(
+                      icon: Icons.flash_on_rounded,
+                      title: '0.4s',
+                      subtitle: 'tap auth',
+                    ),
+                  ),
+                  SizedBox(width: 12),
+                  Expanded(
+                    child: WelcomeMetric(
+                      icon: Icons.verified_user_rounded,
+                      title: '4 roles',
+                      subtitle: 'one app',
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 22),
+              GradientButton(label: 'Get Started', onPressed: onContinue),
+              const SizedBox(height: 12),
+              OutlineActionButton(
+                label: 'Explore UniTap',
+                onPressed: onContinue,
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class WelcomeMetric extends StatelessWidget {
+  const WelcomeMetric({
+    super.key,
+    required this.icon,
+    required this.title,
+    required this.subtitle,
+  });
+
+  final IconData icon;
+  final String title;
+  final String subtitle;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: premiumCardDecoration(radius: 24),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(icon, color: unitapTeal),
+          const SizedBox(height: 12),
+          Text(
+            title,
+            style: const TextStyle(
+              color: unitapInk,
+              fontSize: 22,
+              fontWeight: FontWeight.w900,
+            ),
+          ),
+          const SizedBox(height: 4),
+          Text(
+            subtitle.toUpperCase(),
+            style: const TextStyle(
+              color: Color(0xFF64748B),
+              fontSize: 11,
+              letterSpacing: 1.2,
+              fontWeight: FontWeight.w900,
+            ),
+          ),
+        ],
+      ),
     );
   }
 }

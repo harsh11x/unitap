@@ -15,7 +15,13 @@ void main() {
   ) async {
     await tester.pumpWidget(const UniTapMobileApp());
 
-    expect(find.text('UniTap'), findsOneWidget);
+    expect(find.text('Tap. Pay. Track. All across campus.'), findsOneWidget);
+    expect(find.text('Get Started'), findsOneWidget);
+
+    await tester.tap(find.text('Get Started'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('UniTap'), findsWidgets);
     expect(find.text('Launch Campus'), findsOneWidget);
     expect(find.text('Campus Wallet'), findsOneWidget);
     expect(find.text('RFID TAP-TO-PAY'), findsWidgets);
