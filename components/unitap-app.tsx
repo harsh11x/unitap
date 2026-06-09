@@ -80,6 +80,29 @@ declare global {
 }
 
 const API_BASE = "http://localhost:4000"
+const SESSION_KEY = "unitap-session"
+
+function dashboardPathForRole(role: Role) {
+  if (role === "superAdmin") return "/dashboard/super-admin"
+  return `/dashboard/${role}`
+}
+
+function saveDashboardSession(session: Session) {
+  window.localStorage.setItem(SESSION_KEY, JSON.stringify(session))
+}
+
+async function submitJson(path: string, payload: Record<string, unknown>) {
+  const response = await fetch(`${API_BASE}${path}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  })
+  const data = await response.json()
+  if (!response.ok) {
+    throw new Error(data.error || "Request failed.")
+  }
+  return data
+}
 
 const roleOptions: Array<{
   id: Role
@@ -292,6 +315,8 @@ const initialForm = {
   products: "",
   skipProducts: false,
   topupAmount: "500",
+  paymentAmount: "80",
+  deviceId: "POS01",
 }
 
 export function UniTapApp() {
@@ -305,6 +330,8 @@ export function UniTapApp() {
   const [shops, setShops] = React.useState<Shop[]>([])
   const [loading, setLoading] = React.useState(false)
   const [previewRole, setPreviewRole] = React.useState<Role>("student")
+  const [activePayment, setActivePayment] = React.useState<Record<string, unknown> | null>(null)
+  const [testTransactions, setTestTransactions] = React.useState<Record<string, unknown>[]>([])
 
   const openAuth = (mode: AuthMode, nextRole: Role = role) => {
     setRole(nextRole)
@@ -315,19 +342,6 @@ export function UniTapApp() {
 
   const updateForm = (key: keyof typeof initialForm, value: string | boolean) => {
     setForm((current) => ({ ...current, [key]: value }))
-  }
-
-  const submitJson = async (path: string, payload: Record<string, unknown>) => {
-    const response = await fetch(`${API_BASE}${path}`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-    })
-    const data = await response.json()
-    if (!response.ok) {
-      throw new Error(data.error || "Request failed.")
-    }
-    return data
   }
 
   const handleAuthSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
@@ -372,8 +386,12 @@ export function UniTapApp() {
         dob: form.dob,
         password: form.password,
       })
-      setSession({ role, message: data.message, user: data.user })
+      const nextSession = { role, message: data.message, user: data.user }
+      setSession(nextSession)
+      saveDashboardSession(nextSession)
       setStatus(data.message)
+      window.location.href = dashboardPathForRole(role)
+      return
     }
 
     if (role === "university") {
@@ -386,8 +404,12 @@ export function UniTapApp() {
         registrationId: form.registrationId,
         password: form.password,
       })
-      setSession({ role, message: data.message, user: data.user })
+      const nextSession = { role, message: data.message, user: data.user }
+      setSession(nextSession)
+      saveDashboardSession(nextSession)
       setStatus(data.message)
+      window.location.href = dashboardPathForRole(role)
+      return
     }
 
     if (role === "shopkeeper") {
@@ -400,8 +422,12 @@ export function UniTapApp() {
         password: form.password,
         products: form.skipProducts ? [] : parseProducts(form.products),
       })
-      setSession({ role, message: data.message, user: data.user })
+      const nextSession = { role, message: data.message, user: data.user }
+      setSession(nextSession)
+      saveDashboardSession(nextSession)
       setStatus(data.message)
+      window.location.href = dashboardPathForRole(role)
+      return
     }
 
     if (role === "superAdmin") {
@@ -424,10 +450,12 @@ export function UniTapApp() {
       await loadUniversityShops(data.user.registrationId)
     }
 
-    setSession({ role: data.role, message: data.message, user: data.user, overview: data.overview })
+    const nextSession = { role: data.role, message: data.message, user: data.user, overview: data.overview }
+    setSession(nextSession)
+    saveDashboardSession(nextSession)
     setStatus(data.message)
     setAuthOpen(false)
-    document.getElementById("workspace")?.scrollIntoView({ behavior: "smooth", block: "start" })
+    window.location.href = dashboardPathForRole(data.role)
   }
 
   const loadUniversityShops = async (registrationId: string) => {
@@ -495,6 +523,133 @@ export function UniTapApp() {
       setLoading(false)
     }
   }
+
+  const handleStartPayment = async () => {
+    if (session?.role !== "shopkeeper") return
+
+    setLoading(true)
+    setStatus("Creating RFID payment session...")
+
+    try {
+      const data = await submitJson("/payments/create", {
+        deviceId: form.deviceId,
+        amount: Number(form.paymentAmount),
+        testing: true,
+      })
+      setActivePayment(data)
+      setStatus(`Payment session ready. Ask student to tap card. Payment: ${data.paymentId || data.paymentSessionId}`)
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Unable to create payment session.")
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const handleCancelPayment = async () => {
+    const paymentSessionId = activePayment?.paymentId || activePayment?.paymentSessionId || activePayment?.sessionId
+    if (!paymentSessionId) return
+
+    setLoading(true)
+    setStatus("Cancelling payment session...")
+
+    try {
+      const data = await submitJson("/payments/cancel", { paymentSessionId })
+      setActivePayment(null)
+      setStatus(String(data.message || "Payment session cancelled."))
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Unable to cancel payment session.")
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const handleResetTestingMode = async () => {
+    setLoading(true)
+    setStatus("Resetting RFID testing wallets...")
+    try {
+      const data = await submitJson("/api/testing/reset", {})
+      setActivePayment(null)
+      setPaymentHistory([])
+      setPaymentStats(null)
+      setStatus(String(data.message || "Testing wallets reset."))
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Unable to reset testing mode.")
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  React.useEffect(() => {
+    const studentId = session?.user?.studentId
+    if (session?.role !== "student" || session.user?.isTesting !== true || typeof studentId !== "string") return
+
+    const refresh = async () => {
+      try {
+        const response = await fetch(`${API_BASE}/api/testing/students/${encodeURIComponent(studentId)}`)
+        const data = await response.json()
+        if (response.ok && data.student) {
+          setSession((current) => (current ? { ...current, user: data.student } : current))
+          setTestTransactions(Array.isArray(data.transactions) ? data.transactions : [])
+        }
+      } catch {
+        // Test polling is best-effort; login data remains usable if a refresh fails.
+      }
+    }
+
+    refresh()
+    const timer = window.setInterval(refresh, 2000)
+    return () => window.clearInterval(timer)
+  }, [session?.role, session?.user?.isTesting, session?.user?.studentId])
+
+  React.useEffect(() => {
+    if (session?.role !== "shopkeeper" || session.user?.isTesting !== true) return
+
+    const refresh = async () => {
+      try {
+        const response = await fetch(`${API_BASE}/api/testing/payments`)
+        const data = await response.json()
+        if (response.ok) {
+          setPaymentHistory(Array.isArray(data.transactions) ? data.transactions : [])
+          setPaymentStats(data.stats || null)
+        }
+      } catch {
+        // History polling should never block cashier checkout.
+      }
+    }
+
+    refresh()
+    const timer = window.setInterval(refresh, 2000)
+    return () => window.clearInterval(timer)
+  }, [session?.role, session?.user?.isTesting])
+
+  React.useEffect(() => {
+    const paymentId = activePayment?.paymentId || activePayment?.paymentSessionId || activePayment?.sessionId
+    if (!paymentId || activePayment?.status !== "waiting") return
+
+    const refresh = async () => {
+      try {
+        const response = await fetch(`${API_BASE}/payments/status?paymentId=${encodeURIComponent(String(paymentId))}`)
+        const data = await response.json()
+        if (!response.ok) return
+        setActivePayment((current) => (current ? { ...current, ...data } : current))
+        if (data.status === "waiting" && data.lastFailure) {
+          setStatus(`Payment failed: ${data.lastFailure.failureReason || "Tap failed"}. Waiting for another card tap.`)
+          return
+        }
+        if (data.status === "success") {
+          setStatus(`Payment success. Student ID ${data.studentId} paid ₹${data.paid}. Balance ₹${data.balance}.`)
+        }
+        if (data.status === "failed") {
+          setStatus(String(data.error || "Payment failed."))
+        }
+      } catch {
+        // Keep waiting; the ESP32 can still confirm the payment independently.
+      }
+    }
+
+    const timer = window.setInterval(refresh, 1500)
+    return () => window.clearInterval(timer)
+  }, [activePayment?.paymentId, activePayment?.paymentSessionId, activePayment?.sessionId, activePayment?.status])
 
   return (
     <main className="min-h-screen overflow-hidden bg-[radial-gradient(circle_at_top_left,#eaf4ff_0,#f7fbff_34%,#f8fbff_100%)] text-slate-950 transition-colors duration-500 dark:bg-slate-950 dark:text-white">
@@ -655,7 +810,7 @@ export function UniTapApp() {
         <SectionHeading
           eyebrow="Live preview"
           title="Switch dashboards before you sign in"
-          description="Explore how each role experiences UniTap — then log in to open your real workspace below."
+          description="Explore how each role experiences UniTap — then log in to open a dedicated dashboard page."
         />
         <RolePreviewSection
           previewRole={previewRole}
@@ -684,20 +839,6 @@ export function UniTapApp() {
 
       <CtaBand onOpenAuth={openAuth} />
 
-      <section id="workspace" className="mx-auto max-w-7xl px-4 py-14 sm:px-6 lg:px-8">
-        <Workspace
-          form={form}
-          loading={loading}
-          session={session}
-          shops={shops}
-          status={status}
-          onOpenAuth={openAuth}
-          onModerateShop={moderateShop}
-          onTopup={handleWalletTopup}
-          onUpdate={updateForm}
-        />
-      </section>
-
       <Footer onOpenAuth={openAuth} />
 
       {authOpen && (
@@ -714,6 +855,330 @@ export function UniTapApp() {
           onUpdate={updateForm}
         />
       )}
+    </main>
+  )
+}
+
+export function UniTapDashboard({ expectedRole }: { expectedRole: Role }) {
+  const [form, setForm] = React.useState(initialForm)
+  const [status, setStatus] = React.useState("Loading dashboard session...")
+  const [session, setSession] = React.useState<Session | null>(null)
+  const [shops, setShops] = React.useState<Shop[]>([])
+  const [loading, setLoading] = React.useState(false)
+  const [activePayment, setActivePayment] = React.useState<Record<string, unknown> | null>(null)
+  const [testTransactions, setTestTransactions] = React.useState<Record<string, unknown>[]>([])
+  const [paymentHistory, setPaymentHistory] = React.useState<Record<string, unknown>[]>([])
+  const [paymentStats, setPaymentStats] = React.useState<Record<string, unknown> | null>(null)
+  const [ready, setReady] = React.useState(false)
+
+  const updateForm = (key: keyof typeof initialForm, value: string | boolean) => {
+    setForm((current) => ({ ...current, [key]: value }))
+  }
+
+  const updateSession = (nextSession: Session | null) => {
+    setSession(nextSession)
+    if (nextSession) {
+      saveDashboardSession(nextSession)
+    } else {
+      window.localStorage.removeItem(SESSION_KEY)
+    }
+  }
+
+  const loadUniversityShops = async (registrationId: string) => {
+    const response = await fetch(`${API_BASE}/api/university/${encodeURIComponent(registrationId)}/shops`)
+    const data = await response.json()
+    setShops(data.shops || [])
+  }
+
+  React.useEffect(() => {
+    try {
+      const savedSession = window.localStorage.getItem(SESSION_KEY)
+      if (!savedSession) {
+        setStatus("Please login to open this dashboard.")
+        return
+      }
+
+      const parsedSession = JSON.parse(savedSession) as Session
+      setSession(parsedSession)
+      setStatus(parsedSession.message || `${roleLabel(parsedSession.role)} dashboard ready.`)
+
+      const registrationId = parsedSession.user?.registrationId
+      if (parsedSession.role === "university" && typeof registrationId === "string") {
+        void loadUniversityShops(registrationId)
+      }
+    } catch {
+      window.localStorage.removeItem(SESSION_KEY)
+      setStatus("Dashboard session expired. Please login again.")
+    } finally {
+      setReady(true)
+    }
+  }, [])
+
+  const moderateShop = async (shopId: string, action: "approve" | "ban" | "suspend" | "activate") => {
+    const data = await submitJson(`/api/university/shops/${shopId}/${action}`, {})
+    setStatus(data.message)
+    const registrationId = session?.user?.registrationId
+    if (typeof registrationId === "string") {
+      await loadUniversityShops(registrationId)
+    }
+  }
+
+  const handleWalletTopup = async () => {
+    if (session?.role !== "student" || typeof session.user?.studentId !== "string") return
+
+    setLoading(true)
+    setStatus("Creating Razorpay order...")
+
+    try {
+      await loadRazorpay()
+      const order = await submitJson("/api/wallet/topup/order", {
+        studentId: session.user.studentId,
+        amount: Number(form.topupAmount),
+      })
+
+      const RazorpayCheckout = window.Razorpay
+      if (!RazorpayCheckout) throw new Error("Razorpay checkout failed to load.")
+
+      const checkout = new RazorpayCheckout({
+        key: order.keyId,
+        amount: order.amount,
+        currency: order.currency,
+        name: "UniTap Wallet",
+        description: "Student wallet top-up",
+        order_id: order.orderId,
+        handler: async (payment: {
+          razorpay_order_id: string
+          razorpay_payment_id: string
+          razorpay_signature: string
+        }) => {
+          const verified = await submitJson("/api/wallet/topup/verify", {
+            studentId: session.user?.studentId,
+            razorpayOrderId: payment.razorpay_order_id,
+            razorpayPaymentId: payment.razorpay_payment_id,
+            razorpaySignature: payment.razorpay_signature,
+          })
+
+          updateSession({ ...session, message: verified.message, user: verified.user })
+          setStatus(verified.message)
+        },
+        theme: { color: "#2563eb" },
+      })
+
+      checkout.open()
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Unable to create top-up order.")
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const handleStartPayment = async () => {
+    if (session?.role !== "shopkeeper") return
+
+    setLoading(true)
+    setStatus("Creating RFID payment session...")
+
+    try {
+      const data = await submitJson("/payments/create", {
+        deviceId: form.deviceId,
+        amount: Number(form.paymentAmount),
+        testing: true,
+      })
+      setActivePayment(data)
+      setStatus(`Payment session ready. Ask student to tap card. Payment: ${data.paymentId || data.paymentSessionId}`)
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Unable to create payment session.")
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const handleCancelPayment = async () => {
+    const paymentSessionId = activePayment?.paymentId || activePayment?.paymentSessionId || activePayment?.sessionId
+    if (!paymentSessionId) return
+
+    setLoading(true)
+    setStatus("Cancelling payment session...")
+
+    try {
+      const data = await submitJson("/payments/cancel", { paymentSessionId })
+      setActivePayment(null)
+      setStatus(String(data.message || "Payment session cancelled."))
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Unable to cancel payment session.")
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  React.useEffect(() => {
+    const studentId = session?.user?.studentId
+    if (session?.role !== "student" || session.user?.isTesting !== true || typeof studentId !== "string") return
+
+    const refresh = async () => {
+      try {
+        const response = await fetch(`${API_BASE}/api/testing/students/${encodeURIComponent(studentId)}`)
+        const data = await response.json()
+        if (response.ok && data.student) {
+          const nextSession = { ...session, user: data.student }
+          updateSession(nextSession)
+          setTestTransactions(Array.isArray(data.transactions) ? data.transactions : [])
+        }
+      } catch {
+        // Test polling is best-effort; login data remains usable if a refresh fails.
+      }
+    }
+
+    refresh()
+    const timer = window.setInterval(refresh, 2000)
+    return () => window.clearInterval(timer)
+  }, [session?.role, session?.user?.isTesting, session?.user?.studentId])
+
+  React.useEffect(() => {
+    const paymentId = activePayment?.paymentId || activePayment?.paymentSessionId || activePayment?.sessionId
+    if (!paymentId || activePayment?.status !== "waiting") return
+
+    const refresh = async () => {
+      try {
+        const response = await fetch(`${API_BASE}/payments/status?paymentId=${encodeURIComponent(String(paymentId))}`)
+        const data = await response.json()
+        if (!response.ok) return
+        setActivePayment((current) => (current ? { ...current, ...data } : current))
+        if (data.status === "waiting" && data.lastFailure) {
+          setStatus(`Payment failed: ${data.lastFailure.failureReason || "Tap failed"}. Waiting for another card tap.`)
+          return
+        }
+        if (data.status === "success") {
+          setStatus(`Payment success. Student ID ${data.studentId} paid ₹${data.paid}. Balance ₹${data.balance}.`)
+        }
+        if (data.status === "failed") {
+          setStatus(String(data.error || "Payment failed."))
+        }
+      } catch {
+        // Keep waiting; the ESP32 can still confirm the payment independently.
+      }
+    }
+
+    const timer = window.setInterval(refresh, 1500)
+    return () => window.clearInterval(timer)
+  }, [activePayment?.paymentId, activePayment?.paymentSessionId, activePayment?.sessionId, activePayment?.status])
+
+  const logout = () => {
+    updateSession(null)
+    window.location.href = "/"
+  }
+
+  if (!ready) {
+    return <DashboardShell title="Loading dashboard" status="Checking your UniTap session..." />
+  }
+
+  if (!session) {
+    return (
+      <DashboardShell title="Login Required" status={status}>
+        <a href="/" className="mt-6 inline-flex rounded-full bg-slate-950 px-6 py-3 text-sm font-black text-white">
+          Go to Login
+        </a>
+      </DashboardShell>
+    )
+  }
+
+  if (session.role !== expectedRole) {
+    return (
+      <DashboardShell
+        title="Wrong Dashboard"
+        status={`You are logged in as ${roleLabel(session.role)}. Open the matching dashboard instead.`}
+      >
+        <a
+          href={dashboardPathForRole(session.role)}
+          className="mt-6 inline-flex rounded-full bg-blue-700 px-6 py-3 text-sm font-black text-white"
+        >
+          Open {roleLabel(session.role)} Dashboard
+        </a>
+      </DashboardShell>
+    )
+  }
+
+  return (
+    <DashboardShell title={`${roleLabel(session.role)} Dashboard`} status={status} onLogout={logout}>
+      <Workspace
+        form={form}
+        loading={loading}
+        session={session}
+        shops={shops}
+        status={status}
+        activePayment={activePayment}
+        testTransactions={testTransactions}
+        paymentHistory={paymentHistory}
+        paymentStats={paymentStats}
+        onOpenAuth={() => undefined}
+        onModerateShop={moderateShop}
+        onStartPayment={handleStartPayment}
+        onCancelPayment={handleCancelPayment}
+        onResetTestingMode={async () => {
+          setLoading(true)
+          setStatus("Resetting RFID testing wallets...")
+
+          try {
+            const data = await submitJson("/api/testing/reset", {})
+            setActivePayment(null)
+            setPaymentHistory([])
+            setPaymentStats(null)
+            setStatus(String(data.message || "Testing wallets reset."))
+          } catch (error) {
+            setStatus(error instanceof Error ? error.message : "Unable to reset testing mode.")
+          } finally {
+            setLoading(false)
+          }
+        }}
+        onTopup={handleWalletTopup}
+        onUpdate={updateForm}
+      />
+    </DashboardShell>
+  )
+}
+
+function DashboardShell({
+  children,
+  onLogout,
+  status,
+  title,
+}: {
+  children?: React.ReactNode
+  onLogout?: () => void
+  status: string
+  title: string
+}) {
+  return (
+    <main className="min-h-screen bg-[radial-gradient(circle_at_top_left,#eaf4ff_0,#f7fbff_34%,#f8fbff_100%)] px-4 py-6 text-slate-950 sm:px-6 lg:px-8">
+      <div className="mx-auto flex max-w-7xl items-center justify-between gap-4 rounded-full border border-white/70 bg-white/85 px-5 py-3 shadow-xl shadow-blue-950/10 backdrop-blur">
+        <a href="/" className="flex items-center gap-3">
+          <span className="grid h-11 w-11 place-items-center rounded-2xl bg-gradient-to-br from-blue-700 to-teal-400 text-sm font-black text-white shadow-lg shadow-blue-600/20">
+            UT
+          </span>
+          <span>
+            <span className="block text-sm font-black uppercase tracking-[0.18em] text-slate-500">UniTap</span>
+            <span className="block font-black">{title}</span>
+          </span>
+        </a>
+        {onLogout && (
+          <button
+            type="button"
+            onClick={onLogout}
+            className="rounded-full border border-slate-200 bg-white px-5 py-2 text-sm font-black text-slate-800 shadow-sm"
+          >
+            Logout
+          </button>
+        )}
+      </div>
+
+      <section className="mx-auto max-w-7xl py-10">
+        <div className="mb-6 rounded-[2rem] border border-white/70 bg-white/70 p-6 shadow-xl shadow-blue-950/10 backdrop-blur">
+          <p className="text-sm font-black uppercase tracking-[0.18em] text-teal-600">Separate dashboard</p>
+          <h1 className="mt-2 text-4xl font-black tracking-[-0.04em] sm:text-5xl">{title}</h1>
+          <p className="mt-3 font-semibold text-slate-600">{status}</p>
+        </div>
+        {children}
+      </section>
     </main>
   )
 }
@@ -744,7 +1209,7 @@ function Header({
           <a href="#platform" className="rounded-full px-4 py-2 transition hover:bg-white hover:text-blue-600 dark:hover:bg-white/10">Platform</a>
           <a href="#preview" className="rounded-full px-4 py-2 transition hover:bg-white hover:text-blue-600 dark:hover:bg-white/10">Preview</a>
           <a href="#features" className="rounded-full px-4 py-2 transition hover:bg-white hover:text-blue-600 dark:hover:bg-white/10">Features</a>
-          <a href="#workspace" className="rounded-full px-4 py-2 transition hover:bg-white hover:text-blue-600 dark:hover:bg-white/10">Dashboard</a>
+          <a href="#preview" className="rounded-full px-4 py-2 transition hover:bg-white hover:text-blue-600 dark:hover:bg-white/10">Dashboards</a>
         </div>
 
         <div className="hidden items-center gap-3 lg:flex">
@@ -970,26 +1435,52 @@ function RoleFields({
 }
 
 function Workspace({
+  activePayment,
   form,
   loading,
   session,
   shops,
   status,
+  testTransactions,
+  paymentHistory,
+  paymentStats,
   onOpenAuth,
+  onCancelPayment,
   onModerateShop,
+  onResetTestingMode,
+  onStartPayment,
   onTopup,
   onUpdate,
 }: {
+  activePayment: Record<string, unknown> | null
   form: typeof initialForm
   loading: boolean
   session: Session | null
   shops: Shop[]
   status: string
+  testTransactions: Record<string, unknown>[]
+  paymentHistory: Record<string, unknown>[]
+  paymentStats: Record<string, unknown> | null
   onOpenAuth: (mode: AuthMode, role?: Role) => void
+  onCancelPayment: () => void
   onModerateShop: (shopId: string, action: "approve" | "ban" | "suspend" | "activate") => void
+  onResetTestingMode: () => void
+  onStartPayment: () => void
   onTopup: () => void
   onUpdate: (key: keyof typeof initialForm, value: string | boolean) => void
 }) {
+  const successfulStudentTransactions = testTransactions.filter((transaction) => transaction.status === "success")
+  const failedStudentTransactions = testTransactions.filter((transaction) => transaction.status === "failed")
+  const studentSpent = successfulStudentTransactions.reduce((sum, transaction) => sum + Number(transaction.amount || 0), 0)
+  const successfulShopTransactions = paymentHistory.filter((transaction) => transaction.status === "success")
+  const failedShopTransactions = paymentHistory.filter((transaction) => transaction.status === "failed")
+  const shopRevenue = Number(paymentStats?.totalCollected || 0)
+  const activeAttempts = Array.isArray(activePayment?.attempts) ? activePayment.attempts : []
+  const activeLastFailure =
+    activePayment?.lastFailure && typeof activePayment.lastFailure === "object"
+      ? (activePayment.lastFailure as Record<string, unknown>)
+      : null
+
   if (!session) {
     return (
       <div className="relative overflow-hidden rounded-[2.75rem] border border-white/70 bg-white/85 p-6 shadow-2xl shadow-blue-950/10 backdrop-blur dark:border-white/10 dark:bg-white/10 lg:p-10">
@@ -1066,10 +1557,32 @@ function Workspace({
 
       {session.role === "student" && (
         <div className="mt-6 grid gap-5 lg:grid-cols-[0.8fr_1.2fr]">
+          <div className="grid gap-4 lg:col-span-2 md:grid-cols-4">
+            {[
+              ["Wallet", `₹${Number(session.user?.walletBalance || 0).toLocaleString("en-IN")}`],
+              ["Spent", `₹${studentSpent.toLocaleString("en-IN")}`],
+              ["Accepted", String(successfulStudentTransactions.length)],
+              ["Failed", String(failedStudentTransactions.length)],
+            ].map(([label, value]) => (
+              <div key={label} className="rounded-2xl border border-white/70 bg-slate-50 p-5 shadow-sm dark:border-white/10 dark:bg-slate-950">
+                <p className="text-xs font-black uppercase tracking-[0.16em] text-slate-500">{label}</p>
+                <p className="mt-2 text-2xl font-black">{value}</p>
+              </div>
+            ))}
+          </div>
+          <div className="rounded-2xl bg-slate-50 p-5 dark:bg-slate-950">
+            <p className="text-sm font-black uppercase tracking-wide text-slate-500">Student</p>
+            <p className="mt-2 text-2xl font-black">{String(session.user?.name || "Test Student")}</p>
+            <p className="mt-2 rounded-full bg-blue-100 px-4 py-2 text-sm font-black text-blue-800 dark:bg-blue-400/15 dark:text-blue-200">
+              Student ID: {String(session.user?.studentId || "-")}
+            </p>
+          </div>
           <div className="rounded-2xl bg-slate-50 p-5 dark:bg-slate-950">
             <p className="text-sm font-black uppercase tracking-wide text-slate-500">Wallet Balance</p>
             <p className="mt-2 text-4xl font-black">₹{Number(session.user?.walletBalance || 0).toLocaleString("en-IN")}</p>
-            <p className="mt-2 text-sm text-slate-600 dark:text-slate-300">Top-ups are created with Razorpay and credited after signature verification.</p>
+            <p className="mt-2 text-sm text-slate-600 dark:text-slate-300">
+              {session.user?.isTesting === true ? "RFID testing wallet starts at ₹1000 and refreshes after each tap." : "Top-ups are created with Razorpay and credited after signature verification."}
+            </p>
           </div>
           <div className="rounded-2xl bg-slate-50 p-5 dark:bg-slate-950">
             <h3 className="text-xl font-black">Top Up Wallet</h3>
@@ -1088,6 +1601,224 @@ function Workspace({
               >
                 Pay with Razorpay
               </button>
+            </div>
+          </div>
+          {session.user?.isTesting === true && (
+            <div className="rounded-2xl bg-slate-50 p-5 dark:bg-slate-950 lg:col-span-2">
+              <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                <div>
+                  <h3 className="text-xl font-black">RFID Payment History</h3>
+                  <p className="mt-1 text-sm font-semibold text-slate-500 dark:text-slate-300">
+                    Updates automatically after every ESP32 payment attempt.
+                  </p>
+                </div>
+                <span className="rounded-full bg-emerald-100 px-4 py-2 text-xs font-black uppercase tracking-wide text-emerald-700 dark:bg-emerald-400/15 dark:text-emerald-200">
+                  Live
+                </span>
+              </div>
+              <div className="mt-4 grid gap-3">
+                {testTransactions.slice(0, 8).map((transaction) => (
+                  <div key={String(transaction.id)} className="rounded-2xl bg-white p-4 text-sm font-bold shadow-sm dark:bg-white/10">
+                    <div className="flex items-center justify-between gap-3">
+                      <span className={transaction.status === "success" ? "text-emerald-600 dark:text-emerald-300" : "text-rose-600 dark:text-rose-300"}>
+                        {String(transaction.status).toUpperCase()}
+                      </span>
+                      <span>₹{String(transaction.amount)}</span>
+                    </div>
+                    <p className="mt-1 text-xs text-slate-500 dark:text-slate-300">
+                      Balance after: ₹{String(transaction.balance_after)} · UID {String(transaction.uid || "-")}
+                    </p>
+                    {transaction.failure_reason && (
+                      <p className="mt-2 rounded-xl bg-rose-50 px-3 py-2 text-xs text-rose-700 dark:bg-rose-400/10 dark:text-rose-200">
+                        {String(transaction.failure_reason)}
+                      </p>
+                    )}
+                    {transaction.created_at && (
+                      <p className="mt-2 text-xs text-slate-400">
+                        {new Date(String(transaction.created_at)).toLocaleString()}
+                      </p>
+                    )}
+                  </div>
+                ))}
+                {testTransactions.length === 0 && (
+                  <p className="rounded-2xl bg-white p-4 text-sm font-bold text-slate-500 dark:bg-white/10 dark:text-slate-300">
+                    No RFID payments yet. Keep this dashboard open while the shop takes a payment.
+                  </p>
+                )}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {session.role === "shopkeeper" && (
+        <div className="mt-6 grid gap-5">
+          <div className="grid gap-4 md:grid-cols-4">
+            {[
+              ["Revenue", `₹${shopRevenue.toLocaleString("en-IN")}`],
+              ["Accepted", String(paymentStats?.successful || successfulShopTransactions.length)],
+              ["Failed Taps", String(paymentStats?.failed || failedShopTransactions.length)],
+              ["Pending", String(paymentStats?.pending || (activePayment?.status === "waiting" ? 1 : 0))],
+            ].map(([label, value]) => (
+              <div key={label} className="rounded-2xl border border-white/70 bg-slate-50 p-5 shadow-sm dark:border-white/10 dark:bg-slate-950">
+                <p className="text-xs font-black uppercase tracking-[0.16em] text-slate-500">{label}</p>
+                <p className="mt-2 text-2xl font-black">{value}</p>
+              </div>
+            ))}
+          </div>
+
+          <div className="grid gap-5 lg:grid-cols-[0.9fr_1.1fr]">
+            <div className="rounded-3xl bg-slate-50 p-5 shadow-sm dark:bg-slate-950">
+              <div className="flex items-start justify-between gap-4">
+                <div>
+                  <p className="text-sm font-black uppercase tracking-wide text-slate-500">Take Payment</p>
+                  <h3 className="mt-2 text-2xl font-black">RFID Cashier Console</h3>
+                </div>
+                <span className="rounded-full bg-emerald-100 px-3 py-1 text-xs font-black uppercase text-emerald-700 dark:bg-emerald-400/15 dark:text-emerald-200">
+                  POS01 Online
+                </span>
+              </div>
+              <p className="mt-3 text-sm leading-6 text-slate-600 dark:text-slate-300">
+                If the wrong card is tapped, the same payment stays waiting. Ask the student to tap the correct RFID card and it will retry automatically.
+              </p>
+              <div className="mt-4 rounded-2xl bg-white p-3 text-xs font-bold text-slate-600 dark:bg-white/10 dark:text-slate-300">
+                Registered UIDs: 6EA2D8DB, 1391E839, 83B8B039, C3F4CB38
+              </div>
+              <div className="mt-4 grid gap-3 sm:grid-cols-2">
+                <input
+                  value={form.deviceId}
+                  onChange={(event) => onUpdate("deviceId", event.target.value)}
+                  className="rounded-2xl border border-slate-200 bg-white px-4 py-3 font-bold outline-none transition focus:border-blue-500 focus:ring-4 focus:ring-blue-100 dark:border-white/10 dark:bg-slate-900"
+                  placeholder="POS01"
+                />
+                <input
+                  value={form.paymentAmount}
+                  onChange={(event) => onUpdate("paymentAmount", event.target.value)}
+                  className="rounded-2xl border border-slate-200 bg-white px-4 py-3 font-bold outline-none transition focus:border-blue-500 focus:ring-4 focus:ring-blue-100 dark:border-white/10 dark:bg-slate-900"
+                  placeholder="Amount in INR"
+                />
+              </div>
+              <div className="mt-4 flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  disabled={loading}
+                  onClick={onStartPayment}
+                  className="rounded-2xl bg-gradient-to-r from-blue-700 to-teal-500 px-5 py-3 text-sm font-black text-white shadow-lg disabled:opacity-60"
+                >
+                  Take Payment
+                </button>
+                <button
+                  type="button"
+                  disabled={loading || !activePayment || activePayment.status === "success"}
+                  onClick={onCancelPayment}
+                  className="rounded-2xl border border-slate-200 bg-white px-5 py-3 text-sm font-black text-slate-800 disabled:opacity-60 dark:border-white/10 dark:bg-white/10 dark:text-white"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={() => onUpdate("paymentAmount", "80")}
+                  className="rounded-2xl border border-slate-200 bg-white px-5 py-3 text-sm font-black text-slate-800 dark:border-white/10 dark:bg-white/10 dark:text-white"
+                >
+                  Quick ₹80
+                </button>
+                <button
+                  type="button"
+                  disabled={loading}
+                  onClick={onResetTestingMode}
+                  className="rounded-2xl border border-rose-200 bg-white px-5 py-3 text-sm font-black text-rose-700 disabled:opacity-60 dark:border-rose-300/20 dark:bg-white/10 dark:text-rose-200"
+                >
+                  Reset Demo
+                </button>
+              </div>
+            </div>
+
+            <div className="rounded-3xl bg-slate-950 p-5 text-white shadow-xl">
+              <div className="flex items-center justify-between gap-4">
+                <p className="text-sm font-black uppercase tracking-wide text-teal-300">Customer Display</p>
+                <span className="rounded-full bg-white/10 px-3 py-1 text-xs font-black">
+                  {activePayment ? String(activePayment.status).toUpperCase() : "IDLE"}
+                </span>
+              </div>
+              {activePayment ? (
+                <div className="mt-5 rounded-[1.5rem] border border-white/10 bg-white/10 p-5">
+                  <p className="text-sm font-bold text-slate-300">UniTap Payment Session</p>
+                  <p className="mt-3 text-5xl font-black">
+                    ₹{Number(activePayment.amount || form.paymentAmount || 0).toLocaleString("en-IN")}
+                  </p>
+                  {activePayment.status === "success" ? (
+                    <div className="mt-4 rounded-2xl bg-emerald-400/15 p-4">
+                      <p className="text-sm font-black text-emerald-200">Payment Success</p>
+                      <p className="mt-2 text-lg font-black">Student ID: {String(activePayment.studentId || "-")}</p>
+                      <p className="mt-1 text-sm font-bold text-emerald-100">
+                        Paid ₹{String(activePayment.paid || activePayment.amount)} · Balance ₹{String(activePayment.balance ?? "-")}
+                      </p>
+                    </div>
+                  ) : activeLastFailure ? (
+                    <div className="mt-4 rounded-2xl bg-rose-400/15 p-4">
+                      <p className="text-sm font-black text-rose-200">Payment Failed - Retry Active</p>
+                      <p className="mt-2 text-sm font-bold text-rose-100">
+                        {String(activeLastFailure.failureReason || "Tap failed. Ask student to tap again.")}
+                      </p>
+                      <p className="mt-2 text-xs font-semibold text-slate-300">Waiting for the next RFID tap on the same payment.</p>
+                    </div>
+                  ) : (
+                    <p className="mt-3 rounded-full bg-yellow-400/15 px-4 py-2 text-sm font-black text-yellow-200">
+                      Tap Card
+                    </p>
+                  )}
+                  <p className="mt-4 break-all text-xs font-semibold text-slate-400">
+                    Payment: {String(activePayment.paymentId || activePayment.paymentSessionId || activePayment.sessionId)}
+                  </p>
+                  {activeAttempts.length > 0 && (
+                    <div className="mt-4 grid gap-2">
+                      <p className="text-xs font-black uppercase tracking-wide text-slate-400">Attempts</p>
+                      {activeAttempts.slice(-3).reverse().map((attempt) => (
+                        <div key={String(attempt.id || attempt.createdAt)} className="rounded-xl bg-white/10 px-3 py-2 text-xs font-bold">
+                          {String(attempt.status).toUpperCase()} · UID {String(attempt.uid || "-")} · {String(attempt.failureReason || "Approved")}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <div className="mt-5 rounded-[1.5rem] border border-white/10 bg-white/10 p-5">
+                  <p className="text-3xl font-black">Idle</p>
+                  <p className="mt-2 text-sm text-slate-300">Click Take Payment to show “Tap Card” on the customer display.</p>
+                </div>
+              )}
+            </div>
+          </div>
+
+          <div className="rounded-3xl bg-slate-50 p-5 shadow-sm dark:bg-slate-950">
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+              <div>
+                <p className="text-sm font-black uppercase tracking-wide text-slate-500">Payment Ledger</p>
+                <h3 className="mt-1 text-2xl font-black">Accepted and Failed Attempts</h3>
+              </div>
+              <span className="rounded-full bg-blue-100 px-4 py-2 text-xs font-black uppercase tracking-wide text-blue-700 dark:bg-blue-400/15 dark:text-blue-200">
+                Real-time
+              </span>
+            </div>
+            <div className="mt-5 grid gap-3">
+              {paymentHistory.slice(0, 10).map((transaction) => (
+                <div key={String(transaction.id)} className="grid gap-2 rounded-2xl bg-white p-4 text-sm font-bold shadow-sm dark:bg-white/10 md:grid-cols-[0.7fr_1fr_1fr_0.7fr_1.4fr]">
+                  <span className={transaction.status === "success" ? "text-emerald-600 dark:text-emerald-300" : "text-rose-600 dark:text-rose-300"}>
+                    {String(transaction.status).toUpperCase()}
+                  </span>
+                  <span>Student: {String(transaction.student_id || "-")}</span>
+                  <span>UID: {String(transaction.uid || "-")}</span>
+                  <span>₹{String(transaction.amount || 0)}</span>
+                  <span className="text-xs text-slate-500 dark:text-slate-300">
+                    {String(transaction.failure_reason || "Approved")} · {transaction.created_at ? new Date(String(transaction.created_at)).toLocaleTimeString() : "Now"}
+                  </span>
+                </div>
+              ))}
+              {paymentHistory.length === 0 && (
+                <p className="rounded-2xl bg-white p-5 text-sm font-bold text-slate-500 dark:bg-white/10 dark:text-slate-300">
+                  No payment attempts yet.
+                </p>
+              )}
             </div>
           </div>
         </div>
@@ -1484,7 +2215,7 @@ function Footer({ onOpenAuth }: { onOpenAuth: (mode: AuthMode, role?: Role) => v
               <a href="#platform" className="hover:text-white">Platform</a>
               <a href="#preview" className="hover:text-white">Preview</a>
               <a href="#features" className="hover:text-white">Features</a>
-              <a href="#workspace" className="hover:text-white">Workspace</a>
+              <a href="/dashboard/student" className="hover:text-white">Student Dashboard</a>
             </div>
           </div>
           <div>
